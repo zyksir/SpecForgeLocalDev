@@ -1,0 +1,5 @@
+{"batch_size": 8, "steps": 7, "topk": 10, "num_draft_tokens": 60, "acc_length": 4.79, "duration": 42.5, "throughput": 1503.39, "completion_tokens": 63887, "benchmark": "mtbench"}
+{"batch_size": 8, "steps": 7, "topk": 10, "num_draft_tokens": 60, "acc_length": 4.81, "duration": 42.43, "throughput": 1502.1, "completion_tokens": 63727, "benchmark": "mtbench"}
+{"batch_size": 8, "steps": 3, "topk": 1, "num_draft_tokens": 4, "acc_length": 2.65, "duration": 34.12, "throughput": 1891.51, "completion_tokens": 64530, "benchmark": "mtbench"}
+{"batch_size": 8, "steps": 7, "topk": 10, "num_draft_tokens": 60, "acc_length": 5.06, "duration": 64.75, "throughput": 1054.01, "completion_tokens": 68244, "benchmark": "mtbench"}
+{"batch_size": 8, "steps": 3, "topk": 1, "num_draft_tokens": 4, "acc_length": 2.79, "duration": 32.97, "throughput": 2040.11, "completion_tokens": 67264, "benchmark": "mtbench"}

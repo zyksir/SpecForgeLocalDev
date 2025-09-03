@@ -11,7 +11,7 @@
   "hidden_size": 2048,
   "initializer_range": 0.02,
   "intermediate_size": 12288,
-  "max_position_embeddings": 2048,
+  "max_position_embeddings": 262144,
   "max_window_layers": 48,
   "model_type": "llama",
   "num_attention_heads": 32,
@@ -27,5 +27,12 @@
   "use_cache": true,
   "use_sliding_window": false,
   "vocab_size": 151936,
-  "draft_vocab_size": 32000
+  "draft_vocab_size": 32000,
+  "eagle_config": {
+    "eagle_aux_hidden_state_layer_ids": [
+      1,
+      23,
+      44
+    ]
+  }
 }

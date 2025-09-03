@@ -163,8 +163,8 @@ def parse_args():
     )
 
     parser.add_argument("--verbose", action="store_true")
-    parser.add_argument("--profile-start-step", type=int, default=30)
-    parser.add_argument("--profile-num-steps", type=int, default=4)
+    parser.add_argument("--profile-start-step", type=int, default=7)
+    parser.add_argument("--profile-num-steps", type=int, default=2)
 
     ServerArgs.add_cli_args(parser)
     BenchArgs.add_cli_args(parser)
@@ -236,7 +236,7 @@ class SglOnlineEagle3Trainer:
         args.tp_size = args.tensor_parallel_size
         args.target_tp_size = args.tp_size
         args.target_micro_batch_size = args.target_tp_size
-        args.target_batch_size = args.target_micro_batch_size * 8
+        args.target_batch_size = args.target_micro_batch_size * 2
         set_seed(args.seed)
         self.args = args
         if not dist.is_initialized():
@@ -321,7 +321,17 @@ class SglOnlineEagle3Trainer:
 
         dist.barrier()
         self.micro_batch_idx = 0
-        self.global_batch_idx = 0
+        self.global_batch_idx = 1
+
+        if args.profile:
+            self.torch_profiler = torch.profiler.profile(
+                activities=[
+                    torch.profiler.ProfilerActivity.CPU,
+                    torch.profiler.ProfilerActivity.CUDA,
+                ],
+                # with_stack=True,
+                record_shapes=args.profile_record_shapes,
+            )
 
     def _create_target_model(self):
         target_model = SglangTargetModel(
@@ -544,8 +554,22 @@ class SglOnlineEagle3Trainer:
 
             dist.barrier()
 
+    @torch.profiler.record_function("train_step")
     def train_step(self, data):
         self.micro_batch_idx += 1
+        if self.args.profile and self.micro_batch_idx == self.args.profile_start_step:
+            print_with_rank("Start profile")
+            self.torch_profiler.start()
+        if self.args.profile and self.micro_batch_idx == self.args.profile_start_step + self.args.profile_num_steps:
+            print_with_rank("End profile")
+            self.torch_profiler.stop()
+            output_path = os.path.join(
+                os.environ.get("SGLANG_TORCH_PROFILER_DIR", "./"),
+                f"debug_rank{torch.distributed.get_rank()}.trace.json.gz",
+            )
+            self.torch_profiler.export_chrome_trace(output_path)
+            exit()
+
         plosses, vlosses, acces = self.eagle3_model(
             input_ids=data["input_ids"].cuda(),  # [B, S]
             attention_mask=data["attention_mask"].cuda(),  # [B, S]
@@ -562,6 +586,8 @@ class SglOnlineEagle3Trainer:
             sum([ploss_weight[i] * plosses[i] for i in range(len(plosses))])
             / self.args.draft_accumulation_steps
         )
+        vloss = sum(vlosses) / self.args.draft_accumulation_steps
+        ploss += vloss
         ploss.backward()
         do_optimizer_step = (
             self.micro_batch_idx % self.args.draft_accumulation_steps == 0
@@ -679,13 +705,17 @@ class SglOnlineEagle3Trainer:
                 )
                 data_for_target = []
                 for data_ in data_for_draft:
-                    step_plosses, _, step_acces, do_optimizer_step = self.train_step(
+                    step_plosses, step_vlosses, step_acces, do_optimizer_step = self.train_step(
                         data_
                     )
                     for i in range(len(train_plosses)):
                         train_plosses[i].append(step_plosses[i].item())
                         self.train_logdict[f"train/ploss_{i}"] += (
                             step_plosses[i].item() / self.args.draft_accumulation_steps
+                        )
+                    for i in range(len(step_vlosses)):
+                        self.train_logdict[f"train/vloss_{i}"] += (
+                            step_vlosses[i].item() / self.args.draft_accumulation_steps
                         )
                     for i in range(len(train_acces)):
                         train_acces[i].append(step_acces[i])

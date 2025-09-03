@@ -1,0 +1,2 @@
+{"batch_size": 8, "steps": 7, "topk": 10, "num_draft_tokens": 60, "acc_length": 4.85, "duration": 42.57, "throughput": 1540.92, "completion_tokens": 65604, "benchmark": "mtbench"}
+{"batch_size": 8, "steps": 3, "topk": 1, "num_draft_tokens": 4, "acc_length": 2.64, "duration": 37.15, "throughput": 1800.72, "completion_tokens": 66902, "benchmark": "mtbench"}

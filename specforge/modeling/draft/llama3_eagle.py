@@ -338,7 +338,7 @@ class LlamaMutiRotaryEmbedding(LlamaRotaryEmbedding):
 class LlamaAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
-    def __init__(self, config):
+    def __init__(self, config, q_norm=None, k_norm=None):
         super().__init__()
         self.config = config
         self.hidden_size = config.hidden_size
@@ -363,6 +363,9 @@ class LlamaAttention(nn.Module):
         self.o_proj = nn.Linear(
             self.num_heads * self.head_dim, self.hidden_size, bias=False
         )
+        self.q_norm = q_norm
+        self.k_norm = k_norm
+        self.apply_qk_norm = None
         self._init_rope()
 
     def _init_rope(self):
@@ -414,11 +417,19 @@ class LlamaAttention(nn.Module):
         past_key_values: Optional[Cache] = None,
         output_attentions: bool = False,
         use_cache: bool = False,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        custom_hidden_states: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:        
+        if custom_hidden_states is not None:
+            # in this case, we delay the cat for input_embeds and hidden_states util now
+            hidden_states = torch.cat((hidden_states, custom_hidden_states), dim=-1)
+
         bsz, q_len, _ = hidden_states.size()
 
         query_states = self.q_proj(hidden_states)
         key_states = self.k_proj(hidden_states)
+        if self.apply_qk_norm is not None:
+            query_states, key_states = self.apply_qk_norm(query_states, key_states, self.q_norm, self.k_norm)
         value_states = self.v_proj(hidden_states)
 
         query_states = query_states.view(
@@ -529,6 +540,10 @@ class LlamaAttention(nn.Module):
 
         attn_output = self.o_proj(attn_output)
 
+        if custom_hidden_states is not None:
+            # to adjust QWen Attention Output
+            return attn_output, None
+
         return attn_output
 
 
@@ -551,7 +566,13 @@ class LlamaFlexAttention(LlamaAttention):
         past_key_values: Optional[Cache] = None,
         output_attentions: bool = False,
         use_cache: bool = False,
+        custom_hidden_states: Optional[torch.Tensor] = None,
+        **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        if custom_hidden_states is not None:
+            # in this case, we delay the cat for input_embeds and hidden_states util now
+            hidden_states = torch.cat((hidden_states, custom_hidden_states), dim=-1)
+
         bsz, q_len, _ = hidden_states.size()
 
         past_seen_tokens = (
@@ -561,6 +582,8 @@ class LlamaFlexAttention(LlamaAttention):
         query_states = self.q_proj(hidden_states)
         key_states = self.k_proj(hidden_states)
         value_states = self.v_proj(hidden_states)
+        if self.apply_qk_norm is not None:
+            query_states, key_states = self.apply_qk_norm(query_states, key_states, self.q_norm, self.k_norm)
 
         query_states = query_states.view(
             bsz, q_len, self.num_heads, self.head_dim
@@ -628,6 +651,9 @@ class LlamaFlexAttention(LlamaAttention):
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(bsz, q_len, self.head_dim * self.num_heads)
         attn_output = self.o_proj(attn_output)
+        if custom_hidden_states is not None:
+            # to adjust QWen Attention Output
+            return attn_output, None
         return attn_output
 
 

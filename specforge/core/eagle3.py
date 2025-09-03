@@ -251,6 +251,13 @@ class OnlineEagle3Model(Eagle3Model):
                 past_key_values=past_key_values,
                 use_cache=True,
             )
+            if isinstance(hidden_states_out, tuple):
+                hidden_states_out, router_logits = hidden_states_out
+                aux_loss = self.draft_model.compute_router_loss((router_logits,))
+                vlosses.append(aux_loss)
+            else:
+                router_logits = None
+                aux_loss = 0
 
             # update hidden states for next step
             hidden_states = hidden_states_out
