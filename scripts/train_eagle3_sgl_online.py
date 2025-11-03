@@ -229,6 +229,8 @@ class TrainDataLoaderWrapper:
         ]
         self.steps_consumed = state_dict["steps_consumed"]
 
+import logging
+logging.basicConfig(level=logging.INFO)
 
 class SglOnlineEagle3Trainer:
     def __init__(self, args):
@@ -263,11 +265,10 @@ class SglOnlineEagle3Trainer:
         )
         self.draft_model_last_checkpoint = None
         if args.resume and os.path.isdir(args.output_dir):
-            print_on_rank0(args.output_dir)
             self.draft_model_last_checkpoint = get_last_checkpoint(
                 args.output_dir, prefix="step"
             )
-            print_on_rank0(
+            print(
                 f"Last checkpoint detected: {self.draft_model_last_checkpoint}"
             )
 
@@ -381,6 +382,7 @@ class SglOnlineEagle3Trainer:
         self.draft_model = draft_model
 
     def create_eagle3_model(self):
+        print_on_rank0("Creating eagle3 model")
         param_dtype = torch.bfloat16
         args = self.args
 
@@ -391,7 +393,9 @@ class SglOnlineEagle3Trainer:
         target_head.freeze_weights()
         target_head = target_head.eval().cuda().to(param_dtype)
         self._create_target_model()
+        print_on_rank0("Creating target model finished  ")
         self._create_draft_model(param_dtype)
+        print_on_rank0("Creating draft model finished")
         eagle3_model = OfflineEagle3Model(
             target_model=self.target_model,
             target_head=target_head,
@@ -402,6 +406,7 @@ class SglOnlineEagle3Trainer:
         self.eagle3_model = eagle3_model
 
     def create_dataloaders(self):
+        print_on_rank0("Creating dataloaders")
         tokenizer = AutoTokenizer.from_pretrained(self.args.target_model_path)
         cache_params_string = (
             f"{self.args.train_data_path}-"
@@ -414,6 +419,7 @@ class SglOnlineEagle3Trainer:
             "train"
         ]
         with rank_0_priority():
+            print_on_rank0("Building eagle3 dataset")
             train_eagle3_dataset = build_eagle3_dataset(
                 dataset=train_dataset,
                 tokenizer=tokenizer,
@@ -422,6 +428,7 @@ class SglOnlineEagle3Trainer:
                 cache_dir=os.path.join(self.args.cache_dir, "processed_dataset"),
                 cache_key=cache_key,
             )
+            print_on_rank0("Building eagle3 dataset finished")
             vocab_mapping_path = generate_vocab_mapping_file(
                 dataset=train_eagle3_dataset,
                 target_vocab_size=self.draft_model_config.vocab_size,
@@ -429,6 +436,7 @@ class SglOnlineEagle3Trainer:
                 cache_dir=os.path.join(self.args.cache_dir, "vocab_mapping"),
                 cache_key=cache_key,
             )
+            print_on_rank0("Generating vocab mapping finished")
         train_dataloader = prepare_dp_dataloaders(
             train_eagle3_dataset,
             1,
@@ -546,7 +554,7 @@ class SglOnlineEagle3Trainer:
                         if not os.path.isdir(full_path):
                             continue
                         dirs.append((step_re.match(name).group(1), full_path))
-                    dirs.sort(key=lambda x: x[0], reverse=True)
+                    dirs.sort(key=lambda x: int(x[0]), reverse=True)
                     for i, (_, path) in enumerate(dirs):
                         if i >= self.args.save_total_limit:
                             print(f"Removing {path}")
@@ -580,14 +588,21 @@ class SglOnlineEagle3Trainer:
             target=data["target"].cuda(),  # [B, S, D*3]
         )
 
+        acc_weight = [1.0] * len(plosses)
+        # acc_cuda = torch.tensor(acces).cuda().view(1, -1)
+        # acc_all = torch.empty(dist.get_world_size(), acc_cuda.shape[-1], dtype=torch.float32, device=acc_cuda.device)
+        # dist.all_gather_into_tensor(acc_all, acc_cuda)
+        # acc_weight = torch.softmax((1 - acc_all) * 5, dim=0)[dist.get_rank(), :].view(-1).tolist()
+        # print(f"rank={dist.get_rank()}: {acc_weight=}, {acc_all=}, {acc_cuda=}")
+
         # calculate weighted loss
         ploss_weight = [0.8**i for i in range(len(plosses))]
         ploss = (
-            sum([ploss_weight[i] * plosses[i] for i in range(len(plosses))])
+            sum([ploss_weight[i] * plosses[i] * acc_weight[i] for i in range(len(plosses))])
             / self.args.draft_accumulation_steps
         )
-        vloss = sum(vlosses) / self.args.draft_accumulation_steps
-        ploss += vloss
+        # vloss = sum(vlosses) / self.args.draft_accumulation_steps
+        # ploss += vloss
         ploss.backward()
         do_optimizer_step = (
             self.micro_batch_idx % self.args.draft_accumulation_steps == 0
@@ -705,7 +720,7 @@ class SglOnlineEagle3Trainer:
                 )
                 data_for_target = []
                 for data_ in data_for_draft:
-                    step_plosses, step_vlosses, step_acces, do_optimizer_step = self.train_step(
+                    step_plosses, _, step_acces, do_optimizer_step = self.train_step(
                         data_
                     )
                     for i in range(len(train_plosses)):
@@ -713,10 +728,10 @@ class SglOnlineEagle3Trainer:
                         self.train_logdict[f"train/ploss_{i}"] += (
                             step_plosses[i].item() / self.args.draft_accumulation_steps
                         )
-                    for i in range(len(step_vlosses)):
-                        self.train_logdict[f"train/vloss_{i}"] += (
-                            step_vlosses[i].item() / self.args.draft_accumulation_steps
-                        )
+                    # for i in range(len(step_vlosses)):
+                    #     self.train_logdict[f"train/vloss_{i}"] += (
+                    #         step_vlosses[i].item() / self.args.draft_accumulation_steps
+                    #     )
                     for i in range(len(train_acces)):
                         train_acces[i].append(step_acces[i])
                         self.train_logdict[f"train/acc_{i}"] += (
@@ -758,7 +773,9 @@ class SglOnlineEagle3Trainer:
 
                         self.tracker.log(train_logdict, step=self.global_batch_idx)
                         self.eval()
-
+        
+        self.save_checkpoint(self.global_batch_idx)
+        self.eval()
         destroy_distributed()
         return
 

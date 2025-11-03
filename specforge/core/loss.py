@@ -10,7 +10,6 @@ import torch.nn as nn
 import triton
 import triton.language as tl
 
-
 # Reference implementation
 @torch.compile(dynamic=None)
 def _compute_loss(logits, target_p, position_mask):
@@ -19,6 +18,27 @@ def _compute_loss(logits, target_p, position_mask):
     plogp = target_p * out_logp
     loss = -torch.sum(position_mask * plogp, 2).mean()
     return loss
+
+def adaptive_compute_loss(logits, target_p, position_mask, drop_ratio: float = 0.1):
+    logits = logits.float()
+    out_logp = nn.LogSoftmax(dim=2)(logits)
+    plogp = target_p * out_logp
+    score = -torch.sum(position_mask * plogp, 2)
+    num_tokens = position_mask.sum()
+    dropped_tokens = (num_tokens * drop_ratio).to(int)
+    # mask_dropped = score < torch.topk(score, dropped_tokens, dim=-1).values[:, -1]
+    mask_dropped = position_mask.squeeze(-1).clone()
+    mask_dropped.scatter_(-1, torch.topk(score, dropped_tokens, dim=-1).indices, 0)
+    # print(f"rank={torch.distributed.get_rank()}: {score.shape=}, {score.max().item()=}, {score.sum().item()=}, {num_tokens.item()=}")
+    return (score * mask_dropped).sum() / (mask_dropped.sum() + 1e-5)
+
+def baseline_compute_loss(logits, target_p, position_mask):
+    logits = logits.float()
+    out_logp = nn.LogSoftmax(dim=2)(logits)
+    plogp = target_p * out_logp
+    score = -torch.sum(position_mask * plogp, 2)
+    num_tokens = position_mask.sum()
+    return score.sum() / (num_tokens + 1e-5)
 
 
 def _calculate_settings(n):

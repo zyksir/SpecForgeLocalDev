@@ -48,8 +48,8 @@ from sglang.utils import download_and_cache_file, read_jsonl
 from tqdm.asyncio import tqdm
 
 # SYSTEM_PROMPT = None
-SYSTEM_PROMPT = "You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe.  Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.\n\nIf a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information."
-
+# SYSTEM_PROMPT = "You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe.  Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.\n\nIf a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information."
+SYSTEM_PROMPT = "You are a helpful assistant."
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -197,8 +197,8 @@ def launch_sglang_server(
     if server_args.trust_remote_code:
         sglang_args.extend(["--trust-remote-code"])
 
-    if server_args.enable_ep_moe:
-        sglang_args.extend(["--enable-ep-moe"])
+    # if server_args.enable_ep_moe:
+    #     sglang_args.extend(["--enable-ep-moe"])
 
     if server_args.attention_backend:
         sglang_args.extend(["--attention-backend", server_args.attention_backend])

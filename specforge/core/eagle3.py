@@ -28,12 +28,12 @@ import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel as DDP
 from transformers.cache_utils import DynamicCache
 
-from specforge.core.loss import LogSoftmaxLoss
+from specforge.core.loss import LogSoftmaxLoss, _compute_loss, baseline_compute_loss, adaptive_compute_loss
 from specforge.modeling.draft import Eagle3DraftModel
 from specforge.utils import padding
 
 torch._dynamo.config.capture_scalar_outputs = True
-
+print(__file__)
 
 class Eagle3Model(nn.Module):
     pass
@@ -233,6 +233,7 @@ class OnlineEagle3Model(Eagle3Model):
             cache_hidden = None
             past_key_values = DynamicCache()
 
+        prev_prob = target_p_padded[:, : seq_length, :]
         for idx in range(self.length):
             target_p = target_p_padded[:, idx : idx + seq_length, :]
             is_last = idx == self.length - 1
@@ -253,8 +254,8 @@ class OnlineEagle3Model(Eagle3Model):
             )
             if isinstance(hidden_states_out, tuple):
                 hidden_states_out, router_logits = hidden_states_out
-                aux_loss = self.draft_model.compute_router_loss((router_logits,))
-                vlosses.append(aux_loss)
+                # aux_loss = self.draft_model.compute_router_loss((router_logits,))
+                # vlosses.append(aux_loss)
             else:
                 router_logits = None
                 aux_loss = 0
@@ -277,7 +278,12 @@ class OnlineEagle3Model(Eagle3Model):
                 )
 
             # Step 5.6: calculate loss, in-place modifies logits!
-            loss = LogSoftmaxLoss.apply(logits, target_p, position_mask)
+            loss = LogSoftmaxLoss.apply(logits, prev_prob, position_mask)
+            prev_prob = padding(torch.softmax(logits, dim=-1).detach(), left=False)
+            # loss = _compute_loss(logits, target_p, position_mask)
+            # loss = baseline_compute_loss(logits, target_p, position_mask)
+            # loss = adaptive_compute_loss(logits, target_p, position_mask)
+
             plosses.append(loss)
 
             if not is_last:
@@ -285,13 +291,13 @@ class OnlineEagle3Model(Eagle3Model):
                 input_ids = padding(input_ids, left=False)
                 position_mask = padding(position_mask, left=False)
                 loss_mask = padding(loss_mask, left=False)
-                if self.attention_backend == "sdpa":
-                    ind = torch.arange(seq_length, device=attention_mask.device)
-                    ind0 = ind[idx:]
-                    ind1 = ind[: seq_length - idx]
-                    attention_mask[:, :, ind0, ind1] = torch.finfo(
-                        attention_mask.dtype
-                    ).min
+                # if self.attention_backend == "sdpa":
+                #     ind = torch.arange(seq_length, device=attention_mask.device)
+                #     ind0 = ind[idx:]
+                #     ind1 = ind[: seq_length - idx]
+                #     attention_mask[:, :, ind0, ind1] = torch.finfo(
+                #         attention_mask.dtype
+                #     ).min
                 # Flex attention mask shirnking is handled inside attention module
         return plosses, vlosses, acces
 
