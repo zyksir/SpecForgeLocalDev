@@ -10,8 +10,15 @@ from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache
 from transformers.models.llama.configuration_llama import LlamaConfig
 
-from specforge.distributed import get_draft_tp_group, get_draft_tp_size
-from specforge.modeling.layers import (
+from specforge.distributed import (
+    get_draft_cp_group,
+    get_draft_cp_size,
+    get_draft_tp_group,
+    get_draft_tp_size,
+    ulysses_collect_heads,
+    ulysses_collect_tokens,
+)
+from specforge.modeling.linear import (
     ColumnParallelLinear,
     RowParallelLinear,
     tp_all_reduce,
@@ -601,14 +608,28 @@ class LlamaAttention(nn.Module):
         key_states = self.k_proj(hidden_states)
         value_states = self.v_proj(hidden_states)
 
+        draft_cp_group = get_draft_cp_group()
+        draft_cp_size = get_draft_cp_size()
+
+        query_states = ulysses_collect_tokens(
+            query_states, num_heads=self.num_heads, group=draft_cp_group
+        )
+        key_states = ulysses_collect_tokens(
+            key_states, num_heads=self.num_key_value_heads, group=draft_cp_group
+        )
+        value_states = ulysses_collect_tokens(
+            value_states, num_heads=self.num_key_value_heads, group=draft_cp_group
+        )
+        q_len = q_len * draft_cp_size
+
         query_states = query_states.view(
-            bsz, q_len, self.num_heads, self.head_dim
+            bsz, q_len, self.num_heads // draft_cp_size, self.head_dim
         ).transpose(1, 2)
         key_states = key_states.view(
-            bsz, q_len, self.num_key_value_heads, self.head_dim
+            bsz, q_len, self.num_key_value_heads // draft_cp_size, self.head_dim
         ).transpose(1, 2)
         value_states = value_states.view(
-            bsz, q_len, self.num_key_value_heads, self.head_dim
+            bsz, q_len, self.num_key_value_heads // draft_cp_size, self.head_dim
         ).transpose(1, 2)
 
         if cache_hidden is None:
@@ -705,7 +726,11 @@ class LlamaAttention(nn.Module):
                 attn_output = attn_output + attn_outputi
 
         attn_output = attn_output.transpose(1, 2).contiguous()
-        attn_output = attn_output.reshape(bsz, q_len, self.head_dim * self.num_heads)
+        attn_output = ulysses_collect_heads(
+            attn_output
+        )  # (bsz, q_len, local_heads, self.head_dim )
+        q_len = q_len // draft_cp_size
+        attn_output = attn_output.reshape(bsz, q_len, self.num_heads * self.head_dim)
 
         attn_output = self.o_proj(attn_output)
         if self.tp_size > 1:

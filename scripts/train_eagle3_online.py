@@ -36,11 +36,11 @@ from specforge.distributed import (
     destroy_distributed,
     get_draft_dp_group,
     get_draft_dp_rank,
+    get_draft_dp_size,
     get_draft_tp_group,
     get_draft_tp_rank,
-    get_draft_tp_size,
     get_target_dp_group,
-    get_target_tp_size,
+    get_target_dp_size,
     init_distributed,
 )
 from specforge.modeling.draft import (
@@ -87,6 +87,7 @@ class Eagle3TrainerArgs:
     target_batch_size: int = -1
     target_micro_batch_size: int = 8
     draft_tp_size: int = 1
+    draft_cp_size: int = 1
     draft_dp_size: int = 1
     draft_global_batch_size: int = 16
     draft_micro_batch_size: int = 1
@@ -159,6 +160,9 @@ class Eagle3TrainerArgs:
         )
         parser.add_argument(
             "--draft-tp-size", type=int, default=Eagle3TrainerArgs.draft_tp_size
+        )
+        parser.add_argument(
+            "--draft-cp-size", type=int, default=Eagle3TrainerArgs.draft_cp_size
         )
         parser.add_argument(
             "--target-model-backend",
@@ -329,18 +333,31 @@ class Eagle3TrainerArgs:
 
     @classmethod
     def from_cli_args(cls, args: argparse.Namespace):
+        print_on_rank0(f"validating args...")
+
         world_size = dist.get_world_size()
-        # Parallelism Check
-        if args.target_tp_size >= args.draft_tp_size:
-            assert (
-                args.target_tp_size % args.draft_tp_size == 0
-            ), f"target_tp_size={args.target_tp_size} must be divisible by draft_tp_size={args.draft_tp_size}"
-        else:
-            assert (
-                args.draft_tp_size % args.target_tp_size == 0
-            ), f"draft_tp_size={args.draft_tp_size} must be divisible by target_tp_size={args.target_tp_size}"
         args.target_dp_size = world_size // args.target_tp_size
         args.draft_dp_size = world_size // args.draft_tp_size
+        print_on_rank0(
+            f"{args.target_dp_size=} = {world_size=} // {args.target_tp_size=}"
+        )
+        print_on_rank0(
+            f"{args.draft_dp_size=} = {world_size=} // {args.draft_tp_size=}"
+        )
+        # Parallelism Check
+        if args.draft_tp_size > 1 and args.draft_cp_size > 1:
+            raise ValueError(
+                "draft_tp_size and draft_cp_size cannot be both greater than 1"
+            )
+
+        if args.target_dp_size <= args.draft_dp_size:
+            assert (
+                args.target_dp_size % args.draft_dp_size == 0
+            ), f"target_dp_size={args.target_dp_size} must be divisible by draft_dp_size={args.draft_dp_size}"
+        else:
+            assert (
+                args.draft_dp_size % args.target_dp_size == 0
+            ), f"draft_dp_size={args.draft_dp_size} must be divisible by target_dp_size={args.target_dp_size}"
 
         # GA Check
         if args.target_model_backend == "sglang":
@@ -365,27 +382,19 @@ class Eagle3TrainerArgs:
         # Batch Size Related Check
         if args.target_batch_size == -1:
             args.target_batch_size = args.target_micro_batch_size * max(
-                args.target_tp_size // args.draft_tp_size, 1
+                args.draft_dp_size // args.target_dp_size, 1
             )
         assert (
             args.target_batch_size % args.target_micro_batch_size == 0
         ), f"{args.target_batch_size=} must be divisible by {args.target_micro_batch_size=}"
+
+        # each target batch size need to be splitted into multiple draft micro batch sizes
         assert (
-            args.draft_global_batch_size
+            args.target_micro_batch_size
+            * args.target_dp_size
             % (args.draft_micro_batch_size * args.draft_dp_size)
             == 0
-        ), f"{args.draft_global_batch_size=} must be divisible by {args.draft_micro_batch_size=} * {args.draft_dp_size=}"
-        if args.target_tp_size > args.draft_tp_size:
-            # each target micro batch size need to be splitted into multiple draft micro batch sizes
-            assert (
-                args.target_micro_batch_size
-                % (
-                    args.draft_micro_batch_size
-                    * args.target_tp_size
-                    // args.draft_tp_size
-                )
-                == 0
-            ), f"{args.target_micro_batch_size=} must be divisible by {args.draft_micro_batch_size=} * {args.target_tp_size // args.draft_tp_size=}"
+        ), f"{args.target_micro_batch_size=} * {args.target_dp_size=} must be divisible by {args.draft_micro_batch_size=} * {args.draft_dp_size=}"
 
         args.save_per_epoch = args.save_interval == -1
         if args.resume and os.path.isdir(args.output_dir):
@@ -506,6 +515,7 @@ class Eagle3Trainer:
                 timeout=args.dist_timeout,
                 target_tp_size=self.args.target_tp_size,
                 draft_tp_size=self.args.draft_tp_size,
+                draft_cp_size=self.args.draft_cp_size,
             )
         self.trainer_args = Eagle3TrainerArgs.from_cli_args(args)
 
@@ -552,7 +562,9 @@ class Eagle3Trainer:
 
     def _auto_calculate_num_steps(self):
         args = self.trainer_args
-        if args.target_tp_size >= args.draft_tp_size:
+        target_dp_size = get_target_dp_size()
+        draft_dp_size = get_draft_dp_size()
+        if target_dp_size <= draft_dp_size:
             # data generate this target instance will contribute to multiple draft instances
             # thus target dp size should be used
             steps_per_epoch = math.ceil(
@@ -748,8 +760,8 @@ class Eagle3Trainer:
         )
         cache_key = hashlib.md5(cache_params_string.encode()).hexdigest()
         train_dataset = load_dataset("json", data_files=args.train_data_path)["train"]
-        target_tp_size = get_target_tp_size()
-        draft_tp_size = get_draft_tp_size()
+        target_dp_size = get_target_dp_size()
+        draft_dp_size = get_draft_dp_size()
         with rank_0_priority():
             train_eagle3_dataset = build_eagle3_dataset(
                 dataset=train_dataset,
@@ -778,7 +790,7 @@ class Eagle3Trainer:
             prefetch_factor=8,
             process_group=(
                 get_target_dp_group()
-                if target_tp_size >= draft_tp_size
+                if target_dp_size <= draft_dp_size
                 else get_draft_dp_group()
             ),
             is_vlm=args.is_vlm,
@@ -819,7 +831,7 @@ class Eagle3Trainer:
                 prefetch_factor=8,
                 process_group=(
                     get_target_dp_group()
-                    if target_tp_size >= draft_tp_size
+                    if target_dp_size <= draft_dp_size
                     else get_draft_dp_group()
                 ),
                 is_vlm=args.is_vlm,

@@ -28,6 +28,11 @@ import torch.nn.functional as F
 from transformers import PretrainedConfig
 from transformers.cache_utils import DynamicCache
 
+from specforge.distributed import (
+    get_draft_cp_group,
+    get_draft_cp_rank,
+    get_draft_cp_size,
+)
 from specforge.utils import padding
 
 from .draft import Eagle3DraftModel
@@ -148,6 +153,19 @@ class OnlineEagle3Model(Eagle3Model):
             cache_hidden = None
             past_key_values = DynamicCache()
 
+        draft_cp_size = get_draft_cp_size()
+        draft_cp_rank = get_draft_cp_rank()
+        if draft_cp_size > 1:
+            assert (
+                seq_length % draft_cp_size == 0
+            ), "seq_length must be divisible by draft_cp_size"
+            seq_length_per_cp = seq_length // draft_cp_size
+            seq_start, seq_end = (
+                seq_length_per_cp * draft_cp_rank,
+                seq_length_per_cp * (draft_cp_rank + 1),
+            )
+            hidden_states = hidden_states[:, seq_start:seq_end, :]
+
         for idx in range(self.length):
             target_p = target_p_padded[:, idx : idx + seq_length, :]
             is_last = idx == self.length - 1
@@ -185,6 +203,10 @@ class OnlineEagle3Model(Eagle3Model):
                 )
 
             # Step 5.6: calculate loss, in-place modifies logits!
+            if draft_cp_size > 1:
+                target_p = target_p[:, seq_start:seq_end, :]
+                position_mask = position_mask[:, seq_start:seq_end, :]
+                loss_mask = loss_mask[:, seq_start:seq_end, :]
             loss = LogSoftmaxLoss.apply(logits, target_p, position_mask)
             plosses.append(loss)
 
