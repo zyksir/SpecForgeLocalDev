@@ -487,16 +487,26 @@ class LlamaAttention(nn.Module):
         else:
             self.head_dim = self.hidden_size // config.num_attention_heads
         self.num_key_value_heads = config.num_key_value_heads // self.tp_size
-        self.num_key_value_groups = self.num_heads // self.num_key_value_heads
 
         self.cp_group = get_draft_cp_group()
         self.cp_size = get_draft_cp_size()
         assert (
             config.num_attention_heads % self.cp_size == 0
         ), f"{config.num_attention_heads=} must be divisible by {self.cp_size=}"
-        assert (
-            config.num_key_value_heads % self.cp_size == 0
-        ), f"{config.num_key_value_heads=} must be divisible by {self.cp_size=}"
+
+        assert not (
+            self.cp_size > 1 and self.tp_size > 1
+        ), "cp_size and tp_size cannot be both greater than 1"
+        if self.cp_size > 1 and self.cp_size > self.num_key_value_heads:
+            assert (
+                self.cp_size % self.num_key_value_heads == 0
+            ), f"{self.cp_size=} must be divisible by {self.num_key_value_heads=}"
+            self.num_key_value_groups = self.num_heads // self.cp_size
+        else:
+            assert (
+                self.num_key_value_heads % self.cp_size == 0
+            ), f"{self.num_key_value_heads=} must be divisible by {self.cp_size=}"
+            self.num_key_value_groups = self.num_heads // self.num_key_value_heads
 
         self.max_position_embeddings = config.max_position_embeddings
 
@@ -621,10 +631,16 @@ class LlamaAttention(nn.Module):
             query_states, num_heads=self.num_heads, cp_group=self.cp_group
         )
         key_states = ulysses_collect_tokens(
-            key_states, num_heads=self.num_key_value_heads, cp_group=self.cp_group
+            key_states,
+            num_heads=self.num_key_value_heads,
+            cp_group=self.cp_group,
+            allow_replica=True,
         )
         value_states = ulysses_collect_tokens(
-            value_states, num_heads=self.num_key_value_heads, cp_group=self.cp_group
+            value_states,
+            num_heads=self.num_key_value_heads,
+            cp_group=self.cp_group,
+            allow_replica=True,
         )
         q_len = q_len * self.cp_size
 
@@ -632,10 +648,10 @@ class LlamaAttention(nn.Module):
             bsz, q_len, self.num_heads // self.cp_size, self.head_dim
         ).transpose(1, 2)
         key_states = key_states.view(
-            bsz, q_len, self.num_key_value_heads // self.cp_size, self.head_dim
+            bsz, q_len, max(1, self.num_key_value_heads // self.cp_size), self.head_dim
         ).transpose(1, 2)
         value_states = value_states.view(
-            bsz, q_len, self.num_key_value_heads // self.cp_size, self.head_dim
+            bsz, q_len, max(1, self.num_key_value_heads // self.cp_size), self.head_dim
         ).transpose(1, 2)
 
         if cache_hidden is None:
@@ -779,10 +795,16 @@ class LlamaFlexAttention(LlamaAttention):
             query_states, num_heads=self.num_heads, cp_group=self.cp_group
         )
         key_states = ulysses_collect_tokens(
-            key_states, num_heads=self.num_key_value_heads, cp_group=self.cp_group
+            key_states,
+            num_heads=self.num_key_value_heads,
+            cp_group=self.cp_group,
+            allow_replica=True,
         )
         value_states = ulysses_collect_tokens(
-            value_states, num_heads=self.num_key_value_heads, cp_group=self.cp_group
+            value_states,
+            num_heads=self.num_key_value_heads,
+            cp_group=self.cp_group,
+            allow_replica=True,
         )
         q_len = q_len * self.cp_size
 
@@ -790,10 +812,10 @@ class LlamaFlexAttention(LlamaAttention):
             bsz, q_len, self.num_heads // self.cp_size, self.head_dim
         ).transpose(1, 2)
         key_states = key_states.view(
-            bsz, q_len, self.num_key_value_heads // self.cp_size, self.head_dim
+            bsz, q_len, max(1, self.num_key_value_heads // self.cp_size), self.head_dim
         ).transpose(1, 2)
         value_states = value_states.view(
-            bsz, q_len, self.num_key_value_heads // self.cp_size, self.head_dim
+            bsz, q_len, max(1, self.num_key_value_heads // self.cp_size), self.head_dim
         ).transpose(1, 2)
 
         lck = past_seen_tokens // q_len

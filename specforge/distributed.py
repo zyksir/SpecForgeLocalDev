@@ -207,7 +207,13 @@ def _all_to_all_single(output_tensor, input_tensor, group):
 
 class CollectTokens(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, tensor: torch.Tensor, group: dist.ProcessGroup, num_heads: int):
+    def forward(
+        ctx,
+        tensor: torch.Tensor,
+        group: dist.ProcessGroup,
+        num_heads: int,
+        allow_replica: bool = False,
+    ):
         """Redistribute heads and receive tokens.
         Args:
             tensor: query, key or value. Shape: [B, S // CP, num_heads * head_dim]
@@ -218,9 +224,28 @@ class CollectTokens(torch.autograd.Function):
         ctx.group = group
         ctx.num_heads = num_heads
         cp_size = dist.get_world_size(group)
-        assert num_heads % cp_size == 0
-        ctx.local_heads = num_heads // cp_size
+        if allow_replica and num_heads < cp_size:
+            assert (
+                cp_size % num_heads == 0
+            ), f"{cp_size=} must be divisible by {num_heads=}"
+            ctx.local_heads = 1
+            ctx.replica_heads = cp_size // num_heads
+        else:
+            assert (
+                num_heads % cp_size == 0
+            ), f"{num_heads=} must be divisible by {cp_size=}"
+            ctx.local_heads = num_heads // cp_size
+            ctx.replica_heads = 1
+
         ctx.cp_size = cp_size
+
+        if ctx.replica_heads > 1:
+            B, S = tensor.shape[0], tensor.shape[1]
+            tensor = tensor.view(B, S, cp_size // ctx.replica_heads, 1, -1)
+            tensor = tensor.expand(
+                B, S, cp_size // ctx.replica_heads, ctx.replica_heads, -1
+            ).contiguous()
+            tensor = tensor.transpose(2, 3).contiguous().view(B, S, -1)
 
         tensor = einops.rearrange(
             tensor,
@@ -249,6 +274,12 @@ class CollectTokens(torch.autograd.Function):
         comm_grad = torch.empty_like(rearranged_grad).contiguous()
         _all_to_all_single(comm_grad, rearranged_grad, ctx.group)
 
+        if ctx.replica_heads > 1:
+            comm_grad = einops.rearrange(
+                comm_grad, "CP S (h r) B d -> CP S h r B d", r=ctx.replica_heads
+            )
+            comm_grad = comm_grad.sum(dim=3)
+
         grad_input = einops.rearrange(
             comm_grad, "CP S h B d -> B S (CP h d)"
         ).contiguous()
@@ -256,11 +287,14 @@ class CollectTokens(torch.autograd.Function):
 
 
 def ulysses_collect_tokens(
-    tensor: torch.Tensor, num_heads: int, cp_group: dist.ProcessGroup
+    tensor: torch.Tensor,
+    num_heads: int,
+    cp_group: dist.ProcessGroup,
+    allow_replica: bool = False,
 ) -> torch.Tensor:
     if not cp_group or dist.get_world_size(cp_group) == 1:
         return tensor
-    return CollectTokens.apply(tensor, cp_group, num_heads)
+    return CollectTokens.apply(tensor, cp_group, num_heads, allow_replica)
 
 
 class CollectHeads(torch.autograd.Function):
