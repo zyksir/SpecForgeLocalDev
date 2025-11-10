@@ -746,6 +746,7 @@ class Eagle3Trainer:
                 else ShardingStrategy.NO_SHARD
             ),
             process_group=get_draft_dp_group(),
+            sync_module_states=True,
         )
         print_with_rank("Initialized Eagle3 FSDP model")
         self.eagle3_model = eagle3_model
