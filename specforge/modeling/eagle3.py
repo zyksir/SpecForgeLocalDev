@@ -23,6 +23,7 @@
 from typing import List, Optional, Tuple
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import PretrainedConfig
@@ -155,6 +156,7 @@ class OnlineEagle3Model(Eagle3Model):
 
         draft_cp_size = get_draft_cp_size()
         draft_cp_rank = get_draft_cp_rank()
+        hidden_states_cp, input_ids_cp = hidden_states, input_ids
         if draft_cp_size > 1:
             assert (
                 seq_length % draft_cp_size == 0
@@ -164,20 +166,21 @@ class OnlineEagle3Model(Eagle3Model):
                 seq_length_per_cp * draft_cp_rank,
                 seq_length_per_cp * (draft_cp_rank + 1),
             )
-            hidden_states = hidden_states[:, seq_start:seq_end, :]
+            hidden_states_cp = hidden_states[:, seq_start:seq_end, :]
+            input_ids_cp = input_ids[:, seq_start:seq_end]
 
         for idx in range(self.length):
             target_p = target_p_padded[:, idx : idx + seq_length, :]
             is_last = idx == self.length - 1
 
             # Step 5.1: embed the input ids
-            inputs_embeds = self.draft_model.embed_input_ids(input_ids)
+            inputs_embeds = self.draft_model.embed_input_ids(input_ids_cp)
             inputs_embeds = inputs_embeds.to(hidden_states.dtype)
 
             # Step 5.2: run the draft model backbone
             hidden_states_out = self.draft_model.backbone(
                 input_embeds=inputs_embeds,
-                hidden_states=hidden_states,
+                hidden_states=hidden_states_cp,
                 cache_hidden=cache_hidden,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
@@ -192,22 +195,29 @@ class OnlineEagle3Model(Eagle3Model):
             logits = self.draft_model.compute_logits(hidden_states)
 
             # Step 5.5: record metrics first as we in-place modify logits
+            target_p_cp, position_mask_cp, loss_mask_cp = (
+                target_p,
+                position_mask,
+                loss_mask,
+            )
+            if draft_cp_size > 1:
+                target_p_cp = target_p[:, seq_start:seq_end, :]
+                position_mask_cp = position_mask[:, seq_start:seq_end, :]
+                loss_mask_cp = loss_mask[:, seq_start:seq_end, :]
             with torch.no_grad():
                 acces.append(
                     _compute_metric_acc(
                         logits=logits,
-                        target_p=target_p,
-                        position_mask=position_mask,
-                        loss_mask=loss_mask,
+                        target_p=target_p_cp,
+                        position_mask=position_mask_cp,
+                        loss_mask=loss_mask_cp,
                     )
                 )
 
             # Step 5.6: calculate loss, in-place modifies logits!
+            loss = LogSoftmaxLoss.apply(logits, target_p_cp, position_mask_cp)
             if draft_cp_size > 1:
-                target_p = target_p[:, seq_start:seq_end, :]
-                position_mask = position_mask[:, seq_start:seq_end, :]
-                loss_mask = loss_mask[:, seq_start:seq_end, :]
-            loss = LogSoftmaxLoss.apply(logits, target_p, position_mask)
+                dist.all_reduce(loss, op=dist.ReduceOp.AVG, group=get_draft_cp_group())
             plosses.append(loss)
 
             if not is_last:

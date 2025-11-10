@@ -59,7 +59,7 @@ python scripts/build_eagle3_dataset_cache.py \
     --max-length $MAX_LENGTH
 
 export NUM_GPUS=4
-export OUTPUT_DIR=$PERSIST_DIR/$MODEL_NAME/draft_tp1_target_tp4_outputs/
+export OUTPUT_DIR=$PERSIST_DIR/$MODEL_NAME/draft_cp1_target_tp4_outputs/
 CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun \
     --standalone \
     --nproc_per_node $NUM_GPUS \
@@ -71,6 +71,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun \
     --eval-data-path $GENERATED_DATASET_PATH/eval_data.jsonl \
     --target-tp-size 4 \
     --draft-tp-size 1 \
+    --draft-cp-size 4 \
     --target-batch-size 64 \
     --target-micro-batch-size $NUM_GPUS \
     --draft-global-batch-size 16 \
@@ -91,7 +92,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun \
     --enable-zero2 \
     --resume \
     --wandb-project llama3-8b-eagle3 \
-    --wandb-name dev_draft_tp1_target_tp4 \
+    --wandb-name dev_draft_cp1_target_tp4 \
     --report-to wandb
 
 config_list=(

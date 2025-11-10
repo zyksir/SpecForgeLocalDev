@@ -145,8 +145,8 @@ def init_distributed(
         world_size == target_tp_size * target_dp_size
     ), "world size must be divisible by target tp size"
     assert (
-        world_size == draft_tp_size * draft_dp_size
-    ), "world size must be divisible by draft tp size"
+        world_size == draft_tp_size * draft_cp_size * draft_dp_size
+    ), "world size must be divisible by draft tp size and draft cp size"
     target_device_mesh = dist.device_mesh.init_device_mesh(
         "cuda",
         (target_dp_size, target_tp_size),

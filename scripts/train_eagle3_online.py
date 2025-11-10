@@ -34,6 +34,7 @@ from specforge.data import (
 )
 from specforge.distributed import (
     destroy_distributed,
+    get_draft_cp_size,
     get_draft_dp_group,
     get_draft_dp_rank,
     get_draft_dp_size,
@@ -337,12 +338,12 @@ class Eagle3TrainerArgs:
 
         world_size = dist.get_world_size()
         args.target_dp_size = world_size // args.target_tp_size
-        args.draft_dp_size = world_size // args.draft_tp_size
+        args.draft_dp_size = world_size // (args.draft_tp_size * args.draft_cp_size)
         print_on_rank0(
-            f"{args.target_dp_size=} = {world_size=} // {args.target_tp_size=}"
+            f"{args.target_dp_size=} = ({world_size=} // {args.target_tp_size=})"
         )
         print_on_rank0(
-            f"{args.draft_dp_size=} = {world_size=} // {args.draft_tp_size=}"
+            f"{args.draft_dp_size=} = ({world_size=} // ({args.draft_tp_size=} * {args.draft_cp_size=}))"
         )
         # Parallelism Check
         if args.draft_tp_size > 1 and args.draft_cp_size > 1:
