@@ -62,8 +62,31 @@ class SpecForgeArgs:
     chat_template: Optional[str] = None
     enable_zero2: bool = False
 
+    sample_reweight: Optional[float] = None
+    new_sample_reweight: Optional[float] = None
+    residual_loss: Optional[float] = None
+    max_acc_history: int = 1024
+
     @staticmethod
     def add_cli_args(parser: argparse.ArgumentParser):
+        parser.add_argument(
+            "--sample-reweight",
+            type=float,
+            default=SpecForgeArgs.sample_reweight,
+            help="The reweighting factor for the sample. If not set, no reweighting will be applied.",
+        )
+        parser.add_argument(
+            "--residual-loss", 
+            type=float, 
+            default=SpecForgeArgs.residual_loss, 
+            help="The residual loss factor. If not set, no residual loss will be applied."
+        )
+        parser.add_argument(
+            "--max-acc-history",
+            type=int,
+            default=SpecForgeArgs.max_acc_history,
+            help="The maximum length of the accuracy history. If not set, will use the default value of 1024.",
+        )
         # add model-related arguments
         parser.add_argument(
             "--target-model-path", "--model-path", type=str, required=True

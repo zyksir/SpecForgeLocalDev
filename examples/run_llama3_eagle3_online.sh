@@ -59,7 +59,7 @@ python scripts/build_eagle3_dataset_cache.py \
     --max-length $MAX_LENGTH
 
 export NUM_GPUS=4
-export OUTPUT_DIR=$PERSIST_DIR/$MODEL_NAME/draft_tp1_target_tp4_outputs/
+export OUTPUT_DIR=$PERSIST_DIR/$MODEL_NAME/res0.0/
 CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun \
     --standalone \
     --nproc_per_node $NUM_GPUS \
@@ -83,9 +83,42 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun \
     --total-steps=800000 \
     --warmup-ratio=0.015 \
     --enable-zero2 \
+    --residual-loss 0.0 \
     --resume \
     --wandb-project llama3-8b-eagle3 \
-    --wandb-name dev_draft_tp1_target_tp4 \
+    --wandb-name res0.0 \
+    --report-to wandb
+
+export NUM_GPUS=4
+export OUTPUT_DIR=$PERSIST_DIR/$MODEL_NAME/reweight5.0_res0.0/
+CUDA_VISIBLE_DEVICES=4,5,6,7 torchrun \
+    --standalone \
+    --nproc_per_node $NUM_GPUS \
+    scripts/train_eagle3_online.py \
+    --model-path $MODEL_PATH \
+    --draft-model-config ./configs/llama3-8B-eagle3.json \
+    --train-data-path $GENERATED_DATASET_PATH/train_data.jsonl \
+    --eval-data-path $GENERATED_DATASET_PATH/eval_data.jsonl \
+    --target-tp-size 1 \
+    --draft-tp-size 1 \
+    --batch-size 16 \
+    --draft-micro-batch-size 1 \
+    --target-model-backend sglang \
+    --output-dir $OUTPUT_DIR \
+    --num-epochs 10 \
+    --learning-rate 5e-5 \
+    --draft-attention-backend flex_attention \
+    --max-length $MAX_LENGTH \
+    --chat-template $CHAT_TEMPLATE \
+    --cache-dir $CACHE_DIR \
+    --total-steps=800000 \
+    --warmup-ratio=0.015 \
+    --enable-zero2 \
+    --residual-loss 0.0 \
+    --sample-reweight 5.0 \
+    --resume \
+    --wandb-project llama3-8b-eagle3 \
+    --wandb-name reweight5.0_res0.0 \
     --report-to wandb
 
 config_list=(

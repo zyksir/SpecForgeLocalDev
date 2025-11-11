@@ -31,7 +31,7 @@ from transformers.cache_utils import DynamicCache
 from specforge.utils import padding
 
 from .draft import Eagle3DraftModel
-from .loss import LogSoftmaxLoss
+from .loss import LogSoftmaxLoss, compute_loss_with_drop_tokens
 
 
 class Eagle3Model(nn.Module):
@@ -88,6 +88,8 @@ class OnlineEagle3Model(Eagle3Model):
             past_key_values: We dont use this past_key_values in eagle3, but keep it for compatibility. We control kvcache by cache_hidden.
             position_ids: (batch, seq_len)
         """
+        residual_loss = kwargs.get("residual_loss", False)
+        drop_tokens = kwargs.get("drop_tokens", False)
         # Step 1: handle vocab size
         target_p_padded, position_mask = _compute_target_p_padded(
             target=target,
@@ -148,6 +150,7 @@ class OnlineEagle3Model(Eagle3Model):
             cache_hidden = None
             past_key_values = DynamicCache()
 
+        prev_prob = target_p_padded[:, : seq_length, :]
         for idx in range(self.length):
             target_p = target_p_padded[:, idx : idx + seq_length, :]
             is_last = idx == self.length - 1
@@ -185,7 +188,15 @@ class OnlineEagle3Model(Eagle3Model):
                 )
 
             # Step 5.6: calculate loss, in-place modifies logits!
-            loss = LogSoftmaxLoss.apply(logits, target_p, position_mask)
+            loss_func = lambda logits, target_p, position_mask: LogSoftmaxLoss.apply(logits, target_p, position_mask)
+            if drop_tokens and acces[idx] < 0.4:
+                drop_ratio = torch.exp((1 - acces[idx]))
+                loss_func = lambda logits, target_p, position_mask: compute_loss_with_drop_tokens(logits, target_p, position_mask, drop_ratio)
+            if residual_loss:
+                loss = loss_func(logits, prev_prob, position_mask)
+                prev_prob = padding(torch.softmax(logits, dim=-1).detach(), left=False)
+            else:
+                loss = loss_func(logits, target_p, position_mask)
             plosses.append(loss)
 
             if not is_last:

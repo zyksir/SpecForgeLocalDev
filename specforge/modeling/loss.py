@@ -20,6 +20,18 @@ def _compute_loss(logits, target_p, position_mask):
     loss = -torch.sum(position_mask * plogp, 2).mean()
     return loss
 
+@torch.compile(dynamic=None)
+def compute_loss_with_drop_tokens(logits, target_p, position_mask, drop_ratio: float = 0.1):
+    logits = logits.float()
+    out_logp = nn.LogSoftmax(dim=2)(logits)
+    plogp = target_p * out_logp
+    score = -torch.sum(position_mask * plogp, 2)
+    num_tokens = position_mask.sum()
+    dropped_tokens = (num_tokens * drop_ratio).to(int)
+    mask_dropped = position_mask.squeeze(-1).clone()
+    mask_dropped.scatter_(-1, torch.topk(score, dropped_tokens, dim=-1).indices, 0)
+    return (score * mask_dropped).sum() / (mask_dropped.sum() + 1e-5)
+
 
 def _calculate_settings(n):
     # reference: https://github.com/unslothai/unsloth/blob/fd753fed99ed5f10ef8a9b7139588d9de9ddecfb/unsloth/kernels/utils.py#L43
