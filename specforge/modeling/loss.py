@@ -20,8 +20,11 @@ def _compute_loss(logits, target_p, position_mask):
     loss = -torch.sum(position_mask * plogp, 2).mean()
     return loss
 
+
 @torch.compile(dynamic=None)
-def compute_loss_with_drop_tokens(logits, target_p, position_mask, drop_ratio: float = 0.1):
+def compute_loss_with_drop_tokens(
+    logits, target_p, position_mask, drop_ratio: float = 0.1
+):
     logits = logits.float()
     out_logp = nn.LogSoftmax(dim=2)(logits)
     plogp = target_p * out_logp

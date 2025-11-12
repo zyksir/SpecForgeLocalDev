@@ -59,7 +59,7 @@ python scripts/build_eagle3_dataset_cache.py \
     --max-length $MAX_LENGTH
 
 export NUM_GPUS=4
-export OUTPUT_DIR=$PERSIST_DIR/$MODEL_NAME/res0.0/
+export OUTPUT_DIR=$PERSIST_DIR/$MODEL_NAME/res-4/
 CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun \
     --standalone \
     --nproc_per_node $NUM_GPUS \
@@ -83,14 +83,14 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun \
     --total-steps=800000 \
     --warmup-ratio=0.015 \
     --enable-zero2 \
-    --residual-loss 0.0 \
+    --residual-loss -4.0 \
     --resume \
     --wandb-project llama3-8b-eagle3 \
-    --wandb-name res0.0 \
+    --wandb-name res-4 \
     --report-to wandb
 
 export NUM_GPUS=4
-export OUTPUT_DIR=$PERSIST_DIR/$MODEL_NAME/reweight5.0_res0.0/
+export OUTPUT_DIR=$PERSIST_DIR/$MODEL_NAME/res2/
 CUDA_VISIBLE_DEVICES=4,5,6,7 torchrun \
     --standalone \
     --nproc_per_node $NUM_GPUS \
@@ -114,23 +114,43 @@ CUDA_VISIBLE_DEVICES=4,5,6,7 torchrun \
     --total-steps=800000 \
     --warmup-ratio=0.015 \
     --enable-zero2 \
-    --residual-loss 0.0 \
-    --sample-reweight 5.0 \
+    --residual-loss 2.0 \
     --resume \
     --wandb-project llama3-8b-eagle3 \
-    --wandb-name reweight5.0_res0.0 \
+    --wandb-name res2 \
     --report-to wandb
+
 
 config_list=(
     "8,7,10,60"
     "8,3,1,4"
 )
-CUDA_VISIBLE_DEVICES=1,2 python3 benchmarks/bench_model_speedup.py \
+CUDA_VISIBLE_DEVICES=1 python3 benchmarks/bench_model_speedup.py \
     --model-path meta-llama/Llama-3.1-8B-Instruct \
-    --speculative-draft-model-path $OUTPUT_DIR/epoch_2/ \
-    --port 20001 \
+    --speculative-draft-model-path zhuyksir/EAGLE3-Llama-3.1-8B-Instruct \
+    --port 20001 --host localhost \
     --trust-remote-code \
     --mem-fraction-static 0.8 \
     --config-list "${config_list[@]}" \
-    --benchmark-list mtbench:80 \
-    --output dev_result.jsonl --enable-multi-turn-conversation
+    --benchmark-list mtbench:80 math500:200 gsm8k:200 humaneval:200  \
+    --output dev_result.jsonl --enable-multi-turn-conversation &
+
+CUDA_VISIBLE_DEVICES=0 python3 benchmarks/bench_model_speedup.py \
+    --model-path meta-llama/Llama-3.1-8B-Instruct \
+    --speculative-draft-model-path $PERSIST_DIR/$MODEL_NAME/res0.0/epoch_0/ \
+    --port 20002 \
+    --trust-remote-code \
+    --mem-fraction-static 0.8 \
+    --config-list "${config_list[@]}" \
+    --benchmark-list mtbench:80 math500:200 gsm8k:200 humaneval:200  \
+    --output res0.0_epoch1_result.jsonl --enable-multi-turn-conversation &
+
+CUDA_VISIBLE_DEVICES=2 python3 benchmarks/bench_model_speedup.py \
+    --model-path meta-llama/Llama-3.1-8B-Instruct \
+    --speculative-draft-model-path $PERSIST_DIR/$MODEL_NAME/baseline_output/epoch_1/ \
+    --port 20003 \
+    --trust-remote-code \
+    --mem-fraction-static 0.8 \
+    --config-list "${config_list[@]}" \
+    --benchmark-list mtbench:80 math500:200 gsm8k:200 humaneval:200  \
+    --output baseline_epoch1_result.jsonl --enable-multi-turn-conversation &

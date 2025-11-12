@@ -150,7 +150,7 @@ class OnlineEagle3Model(Eagle3Model):
             cache_hidden = None
             past_key_values = DynamicCache()
 
-        prev_prob = target_p_padded[:, : seq_length, :]
+        prev_prob = target_p_padded[:, :seq_length, :]
         for idx in range(self.length):
             target_p = target_p_padded[:, idx : idx + seq_length, :]
             is_last = idx == self.length - 1
@@ -188,10 +188,14 @@ class OnlineEagle3Model(Eagle3Model):
                 )
 
             # Step 5.6: calculate loss, in-place modifies logits!
-            loss_func = lambda logits, target_p, position_mask: LogSoftmaxLoss.apply(logits, target_p, position_mask)
+            loss_func = lambda logits, target_p, position_mask: LogSoftmaxLoss.apply(
+                logits, target_p, position_mask
+            )
             if drop_tokens and acces[idx] < 0.4:
                 drop_ratio = torch.exp((1 - acces[idx]))
-                loss_func = lambda logits, target_p, position_mask: compute_loss_with_drop_tokens(logits, target_p, position_mask, drop_ratio)
+                loss_func = lambda logits, target_p, position_mask: compute_loss_with_drop_tokens(
+                    logits, target_p, position_mask, drop_ratio
+                )
             if residual_loss:
                 loss = loss_func(logits, prev_prob, position_mask)
                 prev_prob = padding(torch.softmax(logits, dim=-1).detach(), left=False)

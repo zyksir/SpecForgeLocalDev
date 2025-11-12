@@ -172,6 +172,7 @@ class Eagle3Trainer:
         dist.barrier()
 
         from collections import deque
+
         self.acc_history = deque()
 
     def _auto_calculate_num_steps(self):
@@ -582,40 +583,59 @@ class Eagle3Trainer:
             ploss_weight = [0.8**i for i in range(len(plosses))]
         elif args.residual_loss > 0.1:
             import math
+
             k = args.residual_loss
-            f = lambda x: (1-torch.exp(-k * x)) / (1 - math.exp(-k))
+            f = lambda x: (1 - torch.exp(-k * x)) / (1 - math.exp(-k))
             ploss_weight = [1.0]
             for i in range(1, len(plosses)):
-                ploss_weight.append(f(acces[i-1]))
+                ploss_weight.append(f(acces[i - 1]))
         else:
             import math
+
             k = args.residual_loss
-            f = lambda x: (1-torch.exp(-k * x)) / (1 - math.exp(-k))
+            f = lambda x: (1 - torch.exp(-k * x)) / (1 - math.exp(-k))
             ploss_weight = [1.0]
             for i in range(1, len(plosses)):
-                ploss_weight.append(f(acces[i-1]) * ploss_weight[i-1])
+                ploss_weight.append(f(acces[i - 1]) * ploss_weight[i - 1])
 
         if args.sample_reweight is None or abs(args.sample_reweight) <= 0.1:
             acc_weight = [1.0] * len(plosses)
         elif args.sample_reweight > 0.1:
-            K = args.sample_reweight
+            K, DP = args.sample_reweight, dist.get_world_size()
             acc_cuda = torch.tensor(acces).cuda().view(1, -1)
-            acc_all = torch.empty(dist.get_world_size(), acc_cuda.shape[-1], dtype=torch.float32, device=acc_cuda.device)
+            acc_all = torch.empty(
+                DP, acc_cuda.shape[-1], dtype=torch.float32, device=acc_cuda.device
+            )
             dist.all_gather_into_tensor(acc_all, acc_cuda)
-            acc_weight = torch.softmax((1 - acc_all) * K, dim=0)[dist.get_rank(), :].view(-1).tolist()
+            acc_weight = torch.softmax((1 - acc_all) * K, dim=0)[
+                dist.get_rank(), :
+            ].view(-1)
+            acc_weight = (acc_weight * DP).tolist()
         else:
             K, DP, rank = args.sample_reweight, dist.get_world_size(), dist.get_rank()
             acc_cuda = torch.tensor(acces).cuda().view(1, -1)
-            acc_all = torch.empty(DP, acc_cuda.shape[-1], dtype=torch.float32, device=acc_cuda.device)
-            dist.all_gather_into_tensor(acc_all, acc_cuda) # [DP, TTT]
+            acc_all = torch.empty(
+                DP, acc_cuda.shape[-1], dtype=torch.float32, device=acc_cuda.device
+            )
+            dist.all_gather_into_tensor(acc_all, acc_cuda)  # [DP, TTT]
             acc_list = acc_all.cpu()
             for i in range(DP):
                 if len(self.acc_history) >= args.max_acc_history - 1:
                     self.acc_history.popleft()
-                self.acc_history.append(acc_list[(i+rank+1+DP)%DP, :].view(1, -1))
-            acc_weight = torch.softmax((1 - torch.cat(self.acc_history, dim=0)) * K, dim=0)[-1, :].view(-1).tolist()
+                self.acc_history.append(
+                    acc_list[(i + rank + 1 + DP) % DP, :].view(1, -1)
+                )
+            acc_weight = torch.softmax(
+                (1 - torch.cat(self.acc_history, dim=0)) * K, dim=0
+            )[-1, :].view(-1)
+            acc_weight = (acc_weight * len(self.acc_history)).tolist()
         ploss = (
-            sum([ploss_weight[i] * plosses[i] * acc_weight[i] for i in range(len(plosses))])
+            sum(
+                [
+                    ploss_weight[i] * plosses[i] * acc_weight[i]
+                    for i in range(len(plosses))
+                ]
+            )
             / args.draft_accumulation_steps
         )
         ploss.backward()

@@ -63,7 +63,6 @@ class SpecForgeArgs:
     enable_zero2: bool = False
 
     sample_reweight: Optional[float] = None
-    new_sample_reweight: Optional[float] = None
     residual_loss: Optional[float] = None
     max_acc_history: int = 1024
 
@@ -76,10 +75,10 @@ class SpecForgeArgs:
             help="The reweighting factor for the sample. If not set, no reweighting will be applied.",
         )
         parser.add_argument(
-            "--residual-loss", 
-            type=float, 
-            default=SpecForgeArgs.residual_loss, 
-            help="The residual loss factor. If not set, no residual loss will be applied."
+            "--residual-loss",
+            type=float,
+            default=SpecForgeArgs.residual_loss,
+            help="The residual loss factor. If not set, no residual loss will be applied.",
         )
         parser.add_argument(
             "--max-acc-history",
