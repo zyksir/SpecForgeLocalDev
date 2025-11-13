@@ -887,7 +887,7 @@ class LlamaForCausalLMEagle3(Eagle3DraftModel):
 
     config_class = LlamaConfig
 
-    def __init__(self, config, quant_config=None, attention_backend="sdpa") -> None:
+    def __init__(self, config, quant_config=None, attention_backend="sdpa", ttt_length=16) -> None:
         super().__init__(config)
         self.config = config
         self.quant_config = quant_config
@@ -912,6 +912,19 @@ class LlamaForCausalLMEagle3(Eagle3DraftModel):
         self.lm_head = nn.Linear(
             config.hidden_size, config.draft_vocab_size, bias=False
         )
+        self.time_embedding = None
+        if hasattr(config, "time_embedding_freq_dim") and config.time_embedding_freq_dim is not None:
+            self.freq_dim = config.time_embedding_freq_dim
+            self.time_embedding = nn.Sequential(
+                nn.Linear(self.freq_dim, config.hidden_size), 
+                nn.SiLU(), 
+                nn.Linear(config.hidden_size, config.hidden_size)
+            )
+            half = self.freq_dim // 2
+            position = torch.arange(self.ttt_length)
+            sinusoid = torch.outer(position, torch.pow(10000, -torch.arange(half).to(position).div(half)))
+            self.sinusoid = torch.cat([torch.cos(sinusoid), torch.sin(sinusoid)], dim=1)
+            self.register_buffer("sinusoid", sinusoid)
 
         # create vocab buffers
         t2d = torch.zeros(self.vocab_size, dtype=torch.bool)
@@ -996,7 +1009,13 @@ class LlamaForCausalLMEagle3(Eagle3DraftModel):
         position_ids: torch.Tensor,
         past_key_values: Optional[Cache] = None,
         use_cache: bool = True,
+        t: int = None,
     ) -> torch.Tensor:
+        if self.time_embedding is not None:
+            assert isinstance(t, int)
+            time_embedding = self.time_embedding(self.sinusoid[t]).view(1, 1, -1)
+            input_embeds = input_embeds + time_embedding
+            hidden_states = hidden_states + time_embedding
         return self.midlayer(
             input_emb=input_embeds,
             hidden_states=hidden_states,
