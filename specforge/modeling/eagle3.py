@@ -90,6 +90,7 @@ class OnlineEagle3Model(Eagle3Model):
         """
         residual_loss = kwargs.get("residual_loss", False)
         drop_tokens = kwargs.get("drop_tokens", False)
+        acc_mask = kwargs.get("acc_mask", None)
         # Step 1: handle vocab size
         target_p_padded, position_mask = _compute_target_p_padded(
             target=target,
@@ -168,6 +169,7 @@ class OnlineEagle3Model(Eagle3Model):
                 position_ids=position_ids,
                 past_key_values=past_key_values,
                 use_cache=True,
+                t=idx,
             )
 
             # update hidden states for next step
@@ -178,14 +180,13 @@ class OnlineEagle3Model(Eagle3Model):
 
             # Step 5.5: record metrics first as we in-place modify logits
             with torch.no_grad():
-                acces.append(
-                    _compute_metric_acc(
-                        logits=logits,
-                        target_p=target_p,
-                        position_mask=position_mask,
-                        loss_mask=loss_mask,
-                    )
+                acc, predict_correct_mask = _compute_metric_acc(
+                    logits=logits,
+                    target_p=target_p,
+                    position_mask=position_mask,
+                    loss_mask=loss_mask,
                 )
+                acces.append(acc)
 
             # Step 5.6: calculate loss, in-place modifies logits!
             loss_func = lambda logits, target_p, position_mask: LogSoftmaxLoss.apply(
@@ -203,6 +204,11 @@ class OnlineEagle3Model(Eagle3Model):
                 loss = loss_func(logits, target_p, position_mask)
             plosses.append(loss)
 
+            if acc_mask == True:
+                # from specforge.utils import print_on_rank0
+                # print_on_rank0(f"in step {idx}, {position_mask.shape=}, {position_mask.sum()=}, {predict_correct_mask.shape=}, {predict_correct_mask.sum()=}")
+                position_mask = predict_correct_mask
+        
             if not is_last:
                 # Step 5.7: we need to update the loss mask
                 input_ids = padding(input_ids, left=False)
@@ -554,7 +560,6 @@ class QwenVLOnlineEagle3Model(Eagle3Model):
                 position_ids=position_ids,
                 past_key_values=past_key_values,
                 use_cache=True,
-                t=idx,
             )
 
             # update hidden states for next step
@@ -623,6 +628,5 @@ def _compute_target_p(target, t2d, loss_mask):
 
 @torch.compile(dynamic=None)
 def _compute_metric_acc(logits, target_p, position_mask, loss_mask):
-    return (
-        (logits.argmax(-1) == target_p.argmax(-1)) * position_mask.squeeze(-1)
-    ).sum() / loss_mask.sum().clamp_min(1e-6)
+    predict_correct_mask = (logits.argmax(-1) == target_p.argmax(-1)) * position_mask.squeeze(-1)
+    return predict_correct_mask.sum() / loss_mask.sum().clamp_min(1e-6), predict_correct_mask

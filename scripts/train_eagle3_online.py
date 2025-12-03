@@ -260,12 +260,16 @@ class Eagle3Trainer:
         else:
             # Use provided config file
             draft_model_config = AutoDraftModelConfig.from_file(args.draft_model_config)
+        
+        if args.time_emb_dim is not None:
+            draft_model_config.time_embedding_freq_dim = args.time_emb_dim
 
         if args.draft_model_last_checkpoint:
             draft_model: Eagle3DraftModel = AutoEagle3DraftModel.from_pretrained(
                 args.draft_model_last_checkpoint,
                 attention_backend=args.draft_attention_backend,
                 torch_dtype=param_dtype,
+                ttt_length=args.ttt_length,
             ).cuda()
         else:
             draft_model: Eagle3DraftModel = AutoEagle3DraftModel.from_config(
@@ -479,7 +483,7 @@ class Eagle3Trainer:
             draft_model_state_dict = {
                 k.replace("draft_model.", ""): v
                 for k, v in model_state_dict.items()
-                if "draft_model." in k and "embed" not in k.lower()
+                if "draft_model." in k and "embed_tokens" not in k.lower()
             }
 
             draft_dp_rank = get_draft_dp_rank()
@@ -573,6 +577,7 @@ class Eagle3Trainer:
                 target=data.target,
                 hidden_states=data.hidden_states,
                 residual_loss=args.residual_loss is not None,
+                acc_mask=args.acc_mask,
             )
         return plosses, acces
 
@@ -593,7 +598,7 @@ class Eagle3Trainer:
             import math
 
             k = args.residual_loss
-            f = lambda x: (1 - torch.exp(-k * x)) / (1 - math.exp(-k))
+            f = lambda acc: (1 - torch.exp(-k * acc)) / (1 - math.exp(-k))
             ploss_weight = [1.0]
             for i in range(1, len(plosses)):
                 ploss_weight.append(f(acces[i - 1]) * ploss_weight[i - 1])

@@ -65,9 +65,22 @@ class SpecForgeArgs:
     sample_reweight: Optional[float] = None
     residual_loss: Optional[float] = None
     max_acc_history: int = 1024
+    time_emb_dim: Optional[int] = None
+    acc_mask: bool = False
 
     @staticmethod
     def add_cli_args(parser: argparse.ArgumentParser):
+        parser.add_argument(
+            "--acc-mask",
+            action="store_true",
+            help="Whether to use the accuracy mask. If not set, will use the default value of False.",
+        )
+        parser.add_argument(
+            "--time-emb-dim",
+            type=int,
+            default=SpecForgeArgs.time_emb_dim,
+            help="The dimension of the time embedding. If not set, will use the default value of 16.",
+        )
         parser.add_argument(
             "--sample-reweight",
             type=float,

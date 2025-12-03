@@ -59,38 +59,7 @@ python scripts/build_eagle3_dataset_cache.py \
     --max-length $MAX_LENGTH
 
 export NUM_GPUS=4
-export OUTPUT_DIR=$PERSIST_DIR/$MODEL_NAME/res-4/
-CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun \
-    --standalone \
-    --nproc_per_node $NUM_GPUS \
-    scripts/train_eagle3_online.py \
-    --model-path $MODEL_PATH \
-    --draft-model-config ./configs/llama3-8B-eagle3.json \
-    --train-data-path $GENERATED_DATASET_PATH/train_data.jsonl \
-    --eval-data-path $GENERATED_DATASET_PATH/eval_data.jsonl \
-    --target-tp-size 1 \
-    --draft-tp-size 1 \
-    --batch-size 16 \
-    --draft-micro-batch-size 1 \
-    --target-model-backend sglang \
-    --output-dir $OUTPUT_DIR \
-    --num-epochs 10 \
-    --learning-rate 5e-5 \
-    --draft-attention-backend flex_attention \
-    --max-length $MAX_LENGTH \
-    --chat-template $CHAT_TEMPLATE \
-    --cache-dir $CACHE_DIR \
-    --total-steps=800000 \
-    --warmup-ratio=0.015 \
-    --enable-zero2 \
-    --residual-loss -4.0 \
-    --resume \
-    --wandb-project llama3-8b-eagle3 \
-    --wandb-name res-4 \
-    --report-to wandb
-
-export NUM_GPUS=4
-export OUTPUT_DIR=$PERSIST_DIR/$MODEL_NAME/res2/
+export OUTPUT_DIR=$PERSIST_DIR/$MODEL_NAME/res0.0_output/
 CUDA_VISIBLE_DEVICES=4,5,6,7 torchrun \
     --standalone \
     --nproc_per_node $NUM_GPUS \
@@ -114,43 +83,52 @@ CUDA_VISIBLE_DEVICES=4,5,6,7 torchrun \
     --total-steps=800000 \
     --warmup-ratio=0.015 \
     --enable-zero2 \
-    --residual-loss 2.0 \
     --resume \
+    --residual-loss 0.0 \
     --wandb-project llama3-8b-eagle3 \
-    --wandb-name res2 \
+    --wandb-name res0.0 \
     --report-to wandb
-
 
 config_list=(
     "8,7,10,60"
     "8,3,1,4"
 )
-CUDA_VISIBLE_DEVICES=1 python3 benchmarks/bench_model_speedup.py \
+CUDA_VISIBLE_DEVICES=0 python3 benchmarks/bench_model_speedup.py \
     --model-path meta-llama/Llama-3.1-8B-Instruct \
-    --speculative-draft-model-path zhuyksir/EAGLE3-Llama-3.1-8B-Instruct \
-    --port 20001 --host localhost \
+    --speculative-draft-model-path $PERSIST_DIR/$MODEL_NAME/res0.0_output/epoch_4/ \
+    --port 20000 \
     --trust-remote-code \
     --mem-fraction-static 0.8 \
     --config-list "${config_list[@]}" \
     --benchmark-list mtbench:80 math500:200 gsm8k:200 humaneval:200  \
-    --output dev_result.jsonl --enable-multi-turn-conversation &
+    --output res0.0_output_epoch4_result.jsonl --enable-multi-turn-conversation &
 
-CUDA_VISIBLE_DEVICES=0 python3 benchmarks/bench_model_speedup.py \
+CUDA_VISIBLE_DEVICES=1 python3 benchmarks/bench_model_speedup.py \
     --model-path meta-llama/Llama-3.1-8B-Instruct \
-    --speculative-draft-model-path $PERSIST_DIR/$MODEL_NAME/res0.0/epoch_0/ \
+    --speculative-draft-model-path $PERSIST_DIR/$MODEL_NAME/res0.0_output/epoch_1/ \
+    --port 20001 \
+    --trust-remote-code \
+    --mem-fraction-static 0.8 \
+    --config-list "${config_list[@]}" \
+    --benchmark-list mtbench:80 math500:200 gsm8k:200 humaneval:200  \
+    --output res0.0_output_epoch1_result.jsonl --enable-multi-turn-conversation &
+
+CUDA_VISIBLE_DEVICES=2 python3 benchmarks/bench_model_speedup.py \
+    --model-path meta-llama/Llama-3.1-8B-Instruct \
+    --speculative-draft-model-path $PERSIST_DIR/$MODEL_NAME/res0.0_output/epoch_2/ \
     --port 20002 \
     --trust-remote-code \
     --mem-fraction-static 0.8 \
     --config-list "${config_list[@]}" \
     --benchmark-list mtbench:80 math500:200 gsm8k:200 humaneval:200  \
-    --output res0.0_epoch1_result.jsonl --enable-multi-turn-conversation &
+    --output res0.0_output_epoch2_result.jsonl --enable-multi-turn-conversation &
 
-CUDA_VISIBLE_DEVICES=2 python3 benchmarks/bench_model_speedup.py \
+CUDA_VISIBLE_DEVICES=3 python3 benchmarks/bench_model_speedup.py \
     --model-path meta-llama/Llama-3.1-8B-Instruct \
-    --speculative-draft-model-path $PERSIST_DIR/$MODEL_NAME/baseline_output/epoch_1/ \
+    --speculative-draft-model-path $PERSIST_DIR/$MODEL_NAME/res0.0_output/epoch_3/ \
     --port 20003 \
     --trust-remote-code \
     --mem-fraction-static 0.8 \
     --config-list "${config_list[@]}" \
     --benchmark-list mtbench:80 math500:200 gsm8k:200 humaneval:200  \
-    --output baseline_epoch1_result.jsonl --enable-multi-turn-conversation &
+    --output res0.0_output_epoch3_result.jsonl --enable-multi-turn-conversation &

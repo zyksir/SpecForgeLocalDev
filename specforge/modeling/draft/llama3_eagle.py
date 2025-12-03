@@ -913,18 +913,20 @@ class LlamaForCausalLMEagle3(Eagle3DraftModel):
             config.hidden_size, config.draft_vocab_size, bias=False
         )
         self.time_embedding = None
+        self.modulation = None
         if hasattr(config, "time_embedding_freq_dim") and config.time_embedding_freq_dim is not None:
             self.freq_dim = config.time_embedding_freq_dim
             self.time_embedding = nn.Sequential(
-                nn.Linear(self.freq_dim, config.hidden_size), 
+                nn.Linear(self.freq_dim, config.hidden_size, bias=False), 
                 nn.SiLU(), 
-                nn.Linear(config.hidden_size, config.hidden_size)
+                nn.Linear(config.hidden_size, config.hidden_size, bias=False)
             )
             half = self.freq_dim // 2
-            position = torch.arange(self.ttt_length)
+            # position = torch.arange(max(8, ttt_length))
+            position = torch.LongTensor([0, 4, 8, 16, 32, 64, 128, 256])
             sinusoid = torch.outer(position, torch.pow(10000, -torch.arange(half).to(position).div(half)))
-            self.sinusoid = torch.cat([torch.cos(sinusoid), torch.sin(sinusoid)], dim=1)
-            self.register_buffer("sinusoid", sinusoid)
+            self.register_buffer("sinusoid", torch.cat([torch.cos(sinusoid), torch.sin(sinusoid)], dim=1))
+            self.modulation = nn.Parameter(torch.randn(1, 2, config.hidden_size) / config.hidden_size**0.5)
 
         # create vocab buffers
         t2d = torch.zeros(self.vocab_size, dtype=torch.bool)
@@ -1011,12 +1013,7 @@ class LlamaForCausalLMEagle3(Eagle3DraftModel):
         use_cache: bool = True,
         t: int = None,
     ) -> torch.Tensor:
-        if self.time_embedding is not None:
-            assert isinstance(t, int)
-            time_embedding = self.time_embedding(self.sinusoid[t]).view(1, 1, -1)
-            input_embeds = input_embeds + time_embedding
-            hidden_states = hidden_states + time_embedding
-        return self.midlayer(
+        ret = self.midlayer(
             input_emb=input_embeds,
             hidden_states=hidden_states,
             cache_hidden=cache_hidden,
@@ -1024,5 +1021,12 @@ class LlamaForCausalLMEagle3(Eagle3DraftModel):
             position_ids=position_ids,
             past_key_values=past_key_values,
             output_attentions=False,
-            use_cache=False,
+            use_cache=False
         )
+        if self.time_embedding is not None:
+            time_embedding = self.time_embedding(self.sinusoid[t].to(hidden_states.dtype)).view(1, 1, -1)
+            norm_weight, norm_bias = self.modulation.chunk(2, dim=1)
+            # print_on_rank0(f"timestep {t=}, {ret=}, {time_embedding=}, {norm_weight=}, {norm_bias=}")
+            ret = ret * (1 + time_embedding + norm_weight) + time_embedding + norm_bias
+            # print_on_rank0(f"ret after adding time embedding: {ret=}")
+        return ret
